@@ -639,6 +639,11 @@ bool Intrinsic::hasPrettyPrintedArgs(ID id){
 #include "llvm/IR/IntrinsicImpl.inc"
 }
 
+bool Intrinsic::hasDefaultArgs(ID id){
+#define GET_INTRINSIC_DEFAULT_ARG_TABLE
+#include "llvm/IR/IntrinsicImpl.inc"
+}
+
 /// Table of per-target intrinsic name tables.
 #define GET_INTRINSIC_TARGET_DATA
 #include "llvm/IR/IntrinsicImpl.inc"
@@ -1336,4 +1341,7 @@ Intrinsic::ID Intrinsic::getDeinterleaveIntrinsicID(unsigned Factor) {
 }
 
 #define GET_INTRINSIC_PRETTY_PRINT_ARGUMENTS
+#include "llvm/IR/IntrinsicImpl.inc"
+
+#define GET_INTRINSIC_DEFAULT_ARG_VALUES
 #include "llvm/IR/IntrinsicImpl.inc"

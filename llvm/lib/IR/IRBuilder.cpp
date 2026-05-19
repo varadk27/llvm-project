@@ -909,6 +909,33 @@ CallInst *IRBuilderBase::CreateGCGetPointerOffset(Value *DerivedPtr,
                          {DerivedPtr}, {}, Name);
 }
 
+// Fill missing trailing arguments from the default-arg table.
+// Returns true if Args was extended; false if no fill was applied (e.g.
+// the intrinsic has no declared defaults, all args were already supplied,
+// or a missing arg has no default in the table).
+static bool fillDefaultArgs(Function *Fn, SmallVectorImpl<Value *> &Args) {
+  Intrinsic::ID IID = Fn->getIntrinsicID();
+  if (IID == Intrinsic::not_intrinsic || !Intrinsic::hasDefaultArgs(IID))
+    return false;
+
+  unsigned Expected = Fn->arg_size();
+  unsigned Supplied = Args.size();
+  if (Supplied >= Expected)
+    return false;
+
+  FunctionType *FT = Fn->getFunctionType();
+  for (unsigned Idx = Supplied; Idx < Expected; ++Idx) {
+    std::optional<int64_t> Default = Intrinsic::getDefaultArgValue(IID, Idx);
+    if (!Default)
+      return false;
+    Type *ParamTy = FT->getParamType(Idx);
+    if (!ParamTy->isIntegerTy())
+      return false;
+    Args.push_back(ConstantInt::get(ParamTy, static_cast<uint64_t>(*Default)));
+  }
+  return true;
+}
+
 CallInst *IRBuilderBase::CreateUnaryIntrinsic(Intrinsic::ID ID, Value *V,
                                               FMFSource FMFSource,
                                               const Twine &Name) {
@@ -935,7 +962,9 @@ CallInst *IRBuilderBase::CreateIntrinsic(Intrinsic::ID ID,
                                          ArrayRef<OperandBundleDef> OpBundles) {
   Module *M = BB->getModule();
   Function *Fn = Intrinsic::getOrInsertDeclaration(M, ID, OverloadTypes);
-  return createCallHelper(Fn, Args, Name, FMFSource, OpBundles);
+  SmallVector<Value *, 8> FilledArgs(Args);
+  fillDefaultArgs(Fn, FilledArgs);
+  return createCallHelper(Fn, FilledArgs, Name, FMFSource, OpBundles);
 }
 
 CallInst *IRBuilderBase::CreateIntrinsic(Type *RetTy, Intrinsic::ID ID,
@@ -945,7 +974,9 @@ CallInst *IRBuilderBase::CreateIntrinsic(Type *RetTy, Intrinsic::ID ID,
   Module *M = BB->getModule();
   SmallVector<Type *> ArgTys = llvm::map_to_vector(Args, &Value::getType);
   Function *Fn = Intrinsic::getOrInsertDeclaration(M, ID, RetTy, ArgTys);
-  return createCallHelper(Fn, Args, Name, FMFSource);
+  SmallVector<Value *, 8> FilledArgs(Args);
+  fillDefaultArgs(Fn, FilledArgs);
+  return createCallHelper(Fn, FilledArgs, Name, FMFSource);
 }
 
 CallInst *IRBuilderBase::CreateConstrainedFPBinOp(

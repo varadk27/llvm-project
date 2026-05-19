@@ -15,6 +15,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
@@ -158,6 +159,69 @@ TEST_F(IRBuilderTest, Intrinsics) {
       {Builder.getInt32(static_cast<uint32_t>(RoundingMode::TowardZero))});
   II = cast<IntrinsicInst>(Result);
   EXPECT_EQ(II->getIntrinsicID(), Intrinsic::set_rounding);
+}
+
+TEST_F(IRBuilderTest, IntrinsicWithDefaultArgs) {
+  IRBuilder<> Builder(BB);
+
+  // Use test_add3, which has 4 params with a default on the trailing i32.
+  Value *A = Builder.getInt32(1);
+  Value *B = Builder.getInt32(2);
+  Value *C = Builder.getInt32(3);
+
+  // Case 1: caller supplies only 3 of 4 args; default i32 255 is filled.
+  CallInst *Call = Builder.CreateIntrinsic(Intrinsic::nvvm_test_add3,
+                                           /*Types=*/{}, {A, B, C});
+  EXPECT_EQ(Call->arg_size(), 4u);
+  auto *FilledArg = dyn_cast<ConstantInt>(Call->getArgOperand(3));
+  ASSERT_NE(FilledArg, nullptr);
+  EXPECT_TRUE(FilledArg->getType()->isIntegerTy(32));
+  EXPECT_EQ(FilledArg->getZExtValue(), 255u);
+
+  // Case 2: caller supplies all 4 args explicitly; default NOT applied.
+  Value *Explicit = Builder.getInt32(42);
+  CallInst *Call2 = Builder.CreateIntrinsic(Intrinsic::nvvm_test_add3,
+                                            /*Types=*/{}, {A, B, C, Explicit});
+  EXPECT_EQ(Call2->arg_size(), 4u);
+  EXPECT_EQ(Call2->getArgOperand(3), Explicit);
+}
+
+TEST_F(IRBuilderTest, IntrinsicWithMultipleDefaultArgs) {
+  IRBuilder<> Builder(BB);
+
+  // int_nvvm_test_add4: (i32, i32, i32, i32, i64, i32) with defaults
+  //   ArgIndex<4> = 50  (i64)
+  //   ArgIndex<5> = 14  (i32)
+  Value *A = Builder.getInt32(1);
+  Value *B = Builder.getInt32(2);
+  Value *C = Builder.getInt32(3);
+  Value *D = Builder.getInt32(4);
+
+  // Case 1: caller supplies 4 of 6 args; BOTH defaults are filled.
+  CallInst *Call = Builder.CreateIntrinsic(Intrinsic::nvvm_test_add4,
+                                           /*Types=*/{}, {A, B, C, D});
+  EXPECT_EQ(Call->arg_size(), 6u);
+
+  auto *Arg4 = dyn_cast<ConstantInt>(Call->getArgOperand(4));
+  ASSERT_NE(Arg4, nullptr);
+  EXPECT_TRUE(Arg4->getType()->isIntegerTy(64));
+  EXPECT_EQ(Arg4->getZExtValue(), 50u);
+
+  auto *Arg5 = dyn_cast<ConstantInt>(Call->getArgOperand(5));
+  ASSERT_NE(Arg5, nullptr);
+  EXPECT_TRUE(Arg5->getType()->isIntegerTy(32));
+  EXPECT_EQ(Arg5->getZExtValue(), 14u);
+
+  // Case 2: caller supplies 5 of 6 args; only the trailing i32 is filled,
+  // the explicitly-supplied i64 is preserved.
+  Value *ExplicitI64 = Builder.getInt64(99);
+  CallInst *Call2 = Builder.CreateIntrinsic(
+      Intrinsic::nvvm_test_add4, /*Types=*/{}, {A, B, C, D, ExplicitI64});
+  EXPECT_EQ(Call2->arg_size(), 6u);
+  EXPECT_EQ(Call2->getArgOperand(4), ExplicitI64);
+  auto *FilledArg5 = dyn_cast<ConstantInt>(Call2->getArgOperand(5));
+  ASSERT_NE(FilledArg5, nullptr);
+  EXPECT_EQ(FilledArg5->getZExtValue(), 14u);
 }
 
 TEST_F(IRBuilderTest, IntrinsicMangling) {

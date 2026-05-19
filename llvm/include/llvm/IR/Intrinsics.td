@@ -180,6 +180,16 @@ class ArgInfo<ArgIndex idx, list<ArgProperty> arg_properties> : IntrinsicPropert
   list<ArgProperty> Properties = arg_properties;
 }
 
+// DefaultIntArg - Attach an integer default value to an intrinsic argument.
+// The argument must be at the END of the parameter list.
+// Supported param types: llvm_i1_ty (use 0/1 or true/false), llvm_i8_ty, llvm_i16_ty, llvm_i32_ty,
+//                        llvm_i64_ty.
+// Write any integer literal as the value.
+class DefaultIntArg<ArgIndex idx, int val> : IntrinsicProperty {
+  int ArgNo = idx.Value;  // 1-based internally; parser subtracts 1
+  int DefaultVal = val;
+}
+
 def IntrNoReturn : IntrinsicProperty;
 
 // Applied by default.

@@ -1278,6 +1278,36 @@ static bool convertIntrinsicValidType(StringRef Name,
   return false;
 }
 
+static bool upgradeDeclWithDefaultArgs(Function *F, Function *&NewFn) {
+  // Look up the intrinsic ID by full name, e.g. "llvm.nvvm.add3.i32"
+  Intrinsic::ID IID = Intrinsic::lookupIntrinsicID(F->getName());
+  if (IID == Intrinsic::not_intrinsic)
+    return false;
+
+  // Fast path: this intrinsic has no default args annotated in .td
+  if (!Intrinsic::hasDefaultArgs(IID))
+    return false;
+
+  if (Intrinsic::isOverloaded(IID))
+    return false;
+
+  // Get the canonical full declaration for this intrinsic.
+  Function *FullDecl = Intrinsic::getOrInsertDeclaration(F->getParent(), IID);
+
+  // If the existing declaration already has all args, nothing to upgrade
+  if (F->arg_size() >= FullDecl->arg_size())
+    return false;
+
+  // Verify every missing trailing arg has a default in the table
+  for (unsigned Idx = F->arg_size(); Idx < FullDecl->arg_size(); ++Idx) {
+    if (!Intrinsic::getDefaultArgValue(IID, Idx))
+      return false;
+  }
+
+  NewFn = FullDecl;
+  return true;
+}
+
 static bool upgradeIntrinsicFunction1(Function *F, Function *&NewFn,
                                       bool CanUpgradeDebugIntrinsicsToRecords) {
   assert(F && "Illegal to upgrade a non-existent Function.");
@@ -1896,6 +1926,9 @@ static bool upgradeIntrinsicFunction1(Function *F, Function *&NewFn,
   //  to both detect an intrinsic which needs upgrading, and to provide the
   //  upgraded form of the intrinsic. We should perhaps have two separate
   //  functions for this.
+  if (upgradeDeclWithDefaultArgs(F, NewFn))
+    return true;
+
   return false;
 }
 
@@ -4978,6 +5011,60 @@ static Value *upgradeConvertIntrinsicCall(StringRef Name, CallBase *CI,
   return nullptr;
 }
 
+static bool upgradeCallWithDefaultArgs(CallBase *CI, Function *NewFn,
+                                       IRBuilder<> &Builder) {
+  Intrinsic::ID IID = NewFn->getIntrinsicID();
+
+  // Fast path: this intrinsic has no default args in the table.
+  if (!Intrinsic::hasDefaultArgs(IID))
+    return false;
+
+  unsigned OldArgCount = CI->arg_size();
+  unsigned NewArgCount = NewFn->arg_size();
+
+  // If the caller already supplied all arguments (or more), nothing to do.
+  // This mirrors C++ semantics: an explicitly-passed value is never overridden.
+  if (OldArgCount >= NewArgCount)
+    return false;
+
+  // Start with the existing arguments from the old call.
+  SmallVector<Value *, 8> NewArgs(CI->args());
+
+  // Fill in each missing trailing argument from the table.
+  FunctionType *NewFT = NewFn->getFunctionType();
+  for (unsigned Idx = OldArgCount; Idx < NewArgCount; ++Idx) {
+    std::optional<int64_t> DefaultVal = Intrinsic::getDefaultArgValue(IID, Idx);
+
+    // If any missing arg has no entry in the table, give up.
+    if (!DefaultVal)
+      return false;
+
+    Type *ParamTy = NewFT->getParamType(Idx);
+
+    // Only integer types are supported (i1, i8, i16, i32, i64).
+    if (!ParamTy->isIntegerTy())
+      return false;
+
+    NewArgs.push_back(
+        ConstantInt::get(ParamTy, static_cast<uint64_t>(*DefaultVal)));
+  }
+
+  // Preserve operand bundles by creating the call with them.
+  SmallVector<OperandBundleDef, 1> OpBundles;
+  CI->getOperandBundlesAsDefs(OpBundles);
+  CallInst *NewCall = Builder.CreateCall(NewFn, NewArgs, OpBundles);
+
+  NewCall->takeName(CI);
+  NewCall->setCallingConv(CI->getCallingConv());
+  NewCall->copyMetadata(*CI);
+  if (auto *OldCI = dyn_cast<CallInst>(CI))
+    NewCall->setTailCallKind(OldCI->getTailCallKind());
+
+  CI->replaceAllUsesWith(NewCall);
+  CI->eraseFromParent();
+  return true;
+}
+
 /// Upgrade a call to an old intrinsic. All argument and return casting must be
 /// provided to seamlessly integrate with existing context.
 void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
@@ -5083,6 +5170,11 @@ void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
   CallInst *NewCall = nullptr;
   switch (NewFn->getIntrinsicID()) {
   default: {
+    // Last resort: try the data-driven default-arg upgrade.
+    // Handles any intrinsic annotated with DefaultIntArg
+    // in its .td definition, without needing a dedicated case.
+    if (upgradeCallWithDefaultArgs(CI, NewFn, Builder))
+      return;
     DefaultCase();
     return;
   }

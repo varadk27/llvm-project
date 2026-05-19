@@ -385,6 +385,35 @@ CodeGenIntrinsic::CodeGenIntrinsic(const Record *R,
   // Sort the argument attributes for later benefit.
   for (auto &Attrs : ArgumentAttributes)
     llvm::sort(Attrs);
+
+  // Validate: every DefaultIntArg must be on an argument that also has
+  // ImmArg. This narrows the scope of the default-argument feature to
+  // immediate-only parameters, which is the primary intended use case.
+  for (size_t i = 0; i < ParamDefaultValues.size(); ++i) {
+    if (!ParamDefaultValues[i].has_value())
+      continue;
+    if (!isParamImmArg(i))
+      PrintFatalError(TheDef->getLoc(),
+                      "DefaultIntArg on argument " + Twine(i) +
+                          " requires that argument to also have ImmArg");
+  }
+
+  // Validate: defaults must form a contiguous trailing block ending at
+  // the last parameter (mirrors C++ default-argument rules).
+  unsigned NumParams = IS.ParamTys.size();
+  bool SeenDefault = false;
+  for (unsigned i = 0; i < NumParams; ++i) {
+    bool HasDefault =
+        (i < ParamDefaultValues.size() && ParamDefaultValues[i].has_value());
+    if (HasDefault) {
+      SeenDefault = true;
+    } else if (SeenDefault) {
+      PrintFatalError(TheDef->getLoc(),
+                      "DefaultIntArg gap at argument " + Twine(i) +
+                          ". Defaults must form a contiguous trailing block "
+                          "ending at the last parameter.");
+    }
+  }
 }
 
 void CodeGenIntrinsic::setDefaultProperties(
@@ -525,6 +554,14 @@ void CodeGenIntrinsic::setProperty(const Record *R) {
       }
     }
     addPrettyPrintFunction(ArgNo - 1, ArgName, FuncName);
+  } else if (R->isSubClassOf("DefaultIntArg")) {
+    unsigned ArgNo = R->getValueAsInt("ArgNo");
+    if (ArgNo < 1)
+      PrintFatalError(
+          R->getLoc(),
+          "DefaultIntArg requires ArgNo >= 1 (0 is the return value)");
+    int64_t IntVal = R->getValueAsInt("DefaultVal");
+    addDefaultArgValue(ArgNo - 1, IntVal);
   } else {
     llvm_unreachable("Unknown property!");
   }
@@ -580,4 +617,16 @@ void CodeGenIntrinsic::addPrettyPrintFunction(unsigned ArgIdx,
                                           " is already defined as '" +
                                           It->FuncName + "'");
   PrettyPrintFunctions.emplace_back(ArgIdx, ArgName, FuncName);
+}
+
+void CodeGenIntrinsic::addDefaultArgValue(unsigned ArgIdx, int64_t Value) {
+  if (ArgIdx >= ParamDefaultValues.size())
+    ParamDefaultValues.resize(ArgIdx + 1, std::nullopt);
+
+  if (ParamDefaultValues[ArgIdx].has_value())
+    PrintFatalError(TheDef->getLoc(), "Default value for argument " +
+                                          Twine(ArgIdx) +
+                                          " is already defined");
+
+  ParamDefaultValues[ArgIdx] = Value;
 }

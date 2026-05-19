@@ -73,6 +73,9 @@ public:
   void EmitAttributes(const CodeGenIntrinsicTable &Ints, raw_ostream &OS);
   void EmitPrettyPrintArguments(const CodeGenIntrinsicTable &Ints,
                                 raw_ostream &OS);
+  void EmitIntrinsicToDefaultArgTable(const CodeGenIntrinsicTable &Ints,
+                                      raw_ostream &OS);
+  void EmitDefaultArgValues(const CodeGenIntrinsicTable &Ints, raw_ostream &OS);
   void EmitIntrinsicToBuiltinMap(const CodeGenIntrinsicTable &Ints,
                                  bool IsClang, raw_ostream &OS);
 };
@@ -128,6 +131,12 @@ void IntrinsicEmitter::run(raw_ostream &OS, bool Enums) {
 
     // Emit Pretty Print attribute.
     EmitPrettyPrintArguments(Ints, OS);
+
+    // Emit the Intrinsic ID -> default argument bit table.
+    EmitIntrinsicToDefaultArgTable(Ints, OS);
+
+    // Emit the default argument value lookup function.
+    EmitDefaultArgValues(Ints, OS);
 
     // Emit code to translate Clang builtins into LLVM intrinsics.
     EmitIntrinsicToBuiltinMap(Ints, true, OS);
@@ -875,6 +884,54 @@ void Intrinsic::printImmArg(ID IID, unsigned ArgIdx, raw_ostream &OS, const Cons
     break;
   }
 })";
+}
+
+void IntrinsicEmitter::EmitIntrinsicToDefaultArgTable(
+    const CodeGenIntrinsicTable &Ints, raw_ostream &OS) {
+  EmitIntrinsicBitTable(
+      Ints, OS, "GET_INTRINSIC_DEFAULT_ARG_TABLE", "DefaultArgTable",
+      "Intrinsic ID to default argument bitset.",
+      [](const CodeGenIntrinsic &Int) {
+        return llvm::any_of(
+            Int.ParamDefaultValues,
+            [](const std::optional<int64_t> &V) { return V.has_value(); });
+      });
+}
+
+void IntrinsicEmitter::EmitDefaultArgValues(const CodeGenIntrinsicTable &Ints,
+                                            raw_ostream &OS) {
+  OS << R"(
+#ifdef GET_INTRINSIC_DEFAULT_ARG_VALUES
+std::optional<int64_t> Intrinsic::getDefaultArgValue(
+    ID IID, unsigned ArgIdx) {
+  switch (IID) {
+)";
+
+  for (const CodeGenIntrinsic &Int : Ints) {
+    bool HasAny = llvm::any_of(
+        Int.ParamDefaultValues,
+        [](const std::optional<int64_t> &V) { return V.has_value(); });
+    if (!HasAny)
+      continue;
+
+    OS << "  case " << Int.EnumName << ": {\n";
+    OS << "    switch (ArgIdx) {\n";
+    for (auto [Idx, Val] : llvm::enumerate(Int.ParamDefaultValues)) {
+      if (!Val.has_value())
+        continue;
+      OS << "    case " << Idx << ": return " << *Val << "LL;\n";
+    }
+    OS << "    default: return std::nullopt;\n";
+    OS << "    }\n";
+    OS << "  }\n";
+  }
+
+  OS << R"(  default:
+    return std::nullopt;
+  }
+}
+#endif // GET_INTRINSIC_DEFAULT_ARG_VALUES
+)";
 }
 
 void IntrinsicEmitter::EmitIntrinsicToBuiltinMap(
