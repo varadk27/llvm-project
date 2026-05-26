@@ -1278,7 +1278,7 @@ static bool convertIntrinsicValidType(StringRef Name,
   return false;
 }
 
-static bool upgradeDeclWithDefaultArgs(Function *F, Function *&NewFn) {
+static bool upgradeIntrinsicDeclWithDefaultArgs(Function *F, Function *&NewFn) {
   // Look up the intrinsic ID by full name, e.g. "llvm.nvvm.add3.i32"
   Intrinsic::ID IID = Intrinsic::lookupIntrinsicID(F->getName());
   if (IID == Intrinsic::not_intrinsic)
@@ -1288,6 +1288,8 @@ static bool upgradeDeclWithDefaultArgs(Function *F, Function *&NewFn) {
   if (!Intrinsic::hasDefaultArgs(IID))
     return false;
 
+  // Overloaded intrinsics are out of scope for the default-arg feature
+  // and will be supported in a follow-up.
   if (Intrinsic::isOverloaded(IID))
     return false;
 
@@ -1926,7 +1928,7 @@ static bool upgradeIntrinsicFunction1(Function *F, Function *&NewFn,
   //  to both detect an intrinsic which needs upgrading, and to provide the
   //  upgraded form of the intrinsic. We should perhaps have two separate
   //  functions for this.
-  if (upgradeDeclWithDefaultArgs(F, NewFn))
+  if (upgradeIntrinsicDeclWithDefaultArgs(F, NewFn))
     return true;
 
   return false;
@@ -5011,8 +5013,8 @@ static Value *upgradeConvertIntrinsicCall(StringRef Name, CallBase *CI,
   return nullptr;
 }
 
-static bool upgradeCallWithDefaultArgs(CallBase *CI, Function *NewFn,
-                                       IRBuilder<> &Builder) {
+static bool upgradeIntrinsicCallWithDefaultArgs(CallBase *CI, Function *NewFn,
+                                                IRBuilder<> &Builder) {
   Intrinsic::ID IID = NewFn->getIntrinsicID();
 
   // Fast path: this intrinsic has no default args in the table.
@@ -5171,9 +5173,9 @@ void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
   switch (NewFn->getIntrinsicID()) {
   default: {
     // Last resort: try the data-driven default-arg upgrade.
-    // Handles any intrinsic annotated with DefaultIntArg
+    // Handles any intrinsic annotated with ImmArg<..., DefaultVal<...>>
     // in its .td definition, without needing a dedicated case.
-    if (upgradeCallWithDefaultArgs(CI, NewFn, Builder))
+    if (upgradeIntrinsicCallWithDefaultArgs(CI, NewFn, Builder))
       return;
     DefaultCase();
     return;

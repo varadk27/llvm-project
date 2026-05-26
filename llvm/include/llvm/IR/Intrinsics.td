@@ -130,9 +130,24 @@ class Returned<ArgIndex idx> : IntrinsicProperty {
   int ArgNo = idx.Value;
 }
 
-// ImmArg - The specified argument must be an immediate.
-class ImmArg<ArgIndex idx> : IntrinsicProperty {
+// DefaultVal - A value carrier paired with ImmArg to declare a default for
+// a missing trailing argument. AutoUpgrade fills the default when an old
+// .bc / .ll file is loaded.
+class DefaultVal<int val> {
+  bit HasDefault = 1;
+  int Value = val;
+}
+
+// Sentinel — used as the default for ImmArg's optional DefaultVal parameter.
+def NoDefault : DefaultVal<0> {
+  let HasDefault = 0;
+}
+
+// ImmArg - The specified argument must be an immediate. The optional
+// second template parameter declares a default value for AutoUpgrade.
+class ImmArg<ArgIndex idx, DefaultVal val = NoDefault> : IntrinsicProperty {
   int ArgNo = idx.Value;
+  DefaultVal Default = val;
 }
 
 // ReadOnly - The specified argument pointer is not written to through the
@@ -178,16 +193,6 @@ class ImmArgPrinter<string funcname> : ArgProperty {
 class ArgInfo<ArgIndex idx, list<ArgProperty> arg_properties> : IntrinsicProperty {
   int ArgNo = idx.Value;
   list<ArgProperty> Properties = arg_properties;
-}
-
-// DefaultIntArg - Attach an integer default value to an intrinsic argument.
-// The argument must be at the END of the parameter list.
-// Supported param types: llvm_i1_ty (use 0/1 or true/false), llvm_i8_ty, llvm_i16_ty, llvm_i32_ty,
-//                        llvm_i64_ty.
-// Write any integer literal as the value.
-class DefaultIntArg<ArgIndex idx, int val> : IntrinsicProperty {
-  int ArgNo = idx.Value;  // 1-based internally; parser subtracts 1
-  int DefaultVal = val;
 }
 
 def IntrNoReturn : IntrinsicProperty;

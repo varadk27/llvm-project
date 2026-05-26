@@ -386,18 +386,6 @@ CodeGenIntrinsic::CodeGenIntrinsic(const Record *R,
   for (auto &Attrs : ArgumentAttributes)
     llvm::sort(Attrs);
 
-  // Validate: every DefaultIntArg must be on an argument that also has
-  // ImmArg. This narrows the scope of the default-argument feature to
-  // immediate-only parameters, which is the primary intended use case.
-  for (size_t i = 0; i < ParamDefaultValues.size(); ++i) {
-    if (!ParamDefaultValues[i].has_value())
-      continue;
-    if (!isParamImmArg(i))
-      PrintFatalError(TheDef->getLoc(),
-                      "DefaultIntArg on argument " + Twine(i) +
-                          " requires that argument to also have ImmArg");
-  }
-
   // Validate: defaults must form a contiguous trailing block ending at
   // the last parameter (mirrors C++ default-argument rules).
   unsigned NumParams = IS.ParamTys.size();
@@ -409,7 +397,7 @@ CodeGenIntrinsic::CodeGenIntrinsic(const Record *R,
       SeenDefault = true;
     } else if (SeenDefault) {
       PrintFatalError(TheDef->getLoc(),
-                      "DefaultIntArg gap at argument " + Twine(i) +
+                      "DefaultVal missing at argument " + Twine(i) +
                           ". Defaults must form a contiguous trailing block "
                           "ending at the last parameter.");
     }
@@ -518,6 +506,18 @@ void CodeGenIntrinsic::setProperty(const Record *R) {
   } else if (R->isSubClassOf("ImmArg")) {
     unsigned ArgNo = R->getValueAsInt("ArgNo");
     addArgAttribute(ArgNo, ImmArg);
+
+    // If a DefaultVal (not the NoDefault sentinel) was supplied, record it.
+    const RecordVal *DefField = R->getValue("Default");
+    if (DefField) {
+      if (const auto *DI = dyn_cast<DefInit>(DefField->getValue())) {
+        const Record *DefRec = DI->getDef();
+        if (DefRec->getValueAsBit("HasDefault")) {
+          int64_t Value = DefRec->getValueAsInt("Value");
+          addDefaultArgValue(ArgNo - 1, Value);
+        }
+      }
+    }
   } else if (R->isSubClassOf("Align")) {
     unsigned ArgNo = R->getValueAsInt("ArgNo");
     uint64_t Align = R->getValueAsInt("Align");
@@ -554,14 +554,6 @@ void CodeGenIntrinsic::setProperty(const Record *R) {
       }
     }
     addPrettyPrintFunction(ArgNo - 1, ArgName, FuncName);
-  } else if (R->isSubClassOf("DefaultIntArg")) {
-    unsigned ArgNo = R->getValueAsInt("ArgNo");
-    if (ArgNo < 1)
-      PrintFatalError(
-          R->getLoc(),
-          "DefaultIntArg requires ArgNo >= 1 (0 is the return value)");
-    int64_t IntVal = R->getValueAsInt("DefaultVal");
-    addDefaultArgValue(ArgNo - 1, IntVal);
   } else {
     llvm_unreachable("Unknown property!");
   }
